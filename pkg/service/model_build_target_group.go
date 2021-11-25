@@ -494,16 +494,14 @@ func (t *defaultModelBuildTask) buildTargetGroupBindingNodeSelector(_ context.Co
 	if targetType != elbv2model.TargetTypeInstance {
 		return nil, nil
 	}
-	var targetNodeLabels map[string]string
-	if _, err := t.annotationParser.ParseStringMapAnnotation(annotations.SvcLBSuffixTargetNodeLabels, &targetNodeLabels, t.service.Annotations); err != nil {
+	var targetNodeLabels *metav1.LabelSelector
+	if _, err := t.annotationParser.ParseLabelSelectorAnnotation(annotations.SvcLBSuffixTargetNodeLabels, &targetNodeLabels, t.service.Annotations); err != nil {
 		return nil, err
 	}
-	if len(targetNodeLabels) == 0 {
+	if len(targetNodeLabels.MatchLabels) == 0 && len(targetNodeLabels.MatchExpressions) == 0 {
 		return nil, nil
 	}
-	return &metav1.LabelSelector{
-		MatchLabels: targetNodeLabels,
-	}, nil
+	return targetNodeLabels, nil
 }
 
 func (t *defaultModelBuildTask) buildHealthCheckNetworkingIngressRules(trafficSource, hcSource []elbv2model.NetworkingPeer, tgPort, hcPort intstr.IntOrString,

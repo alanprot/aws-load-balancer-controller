@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"strconv"
 	"strings"
 )
@@ -55,6 +58,10 @@ type Parser interface {
 	// ParseStringMapAnnotation parses comma separated key=value pairs into a map
 	// returns true if the annotation exists
 	ParseStringMapAnnotation(annotation string, value *map[string]string, annotations map[string]string, opts ...ParseOption) (bool, error)
+
+	// ParseLabelSelectorAnnotation parses label selector annotations. Ex: label=value,label2!=value2
+	// returns true if the annotation exists
+	ParseLabelSelectorAnnotation(annotation string, value **metav1.LabelSelector, annotations map[string]string, opts ...ParseOption) (bool, error)
 }
 
 // NewSuffixAnnotationParser returns new suffixAnnotationParser based on specified prefix.
@@ -127,6 +134,28 @@ func (p *suffixAnnotationParser) ParseJSONAnnotation(annotation string, value in
 	return true, nil
 }
 
+func (p *suffixAnnotationParser) ParseLabelSelectorAnnotation(annotation string, value **metav1.LabelSelector, annotations map[string]string, opts ...ParseOption) (bool, error) {
+	raw := ""
+	exists, matchedKey := p.parseStringAnnotation(annotation, &raw, annotations, opts...)
+	if !exists {
+		return false, nil
+	}
+
+	s, err := labels.Parse(raw)
+
+	if err != nil {
+		return false, errors.Errorf("failed to parse label selector annotation, %v: %v %v", matchedKey, raw, err)
+	}
+
+	*value, err = selectorToLabelSelector(s)
+
+	if err != nil {
+		return false, errors.Errorf("failed to parse label selector annotation, %v: %v %v", matchedKey, raw, err)
+	}
+
+	return true, nil
+}
+
 func (p *suffixAnnotationParser) ParseStringMapAnnotation(annotation string, value *map[string]string, annotations map[string]string, opts ...ParseOption) (bool, error) {
 	raw := ""
 	exists, matchedKey := p.parseStringAnnotation(annotation, &raw, annotations, opts...)
@@ -180,6 +209,42 @@ func (p *suffixAnnotationParser) buildAnnotationKeys(suffix string, opts ...Pars
 		}
 	}
 	return keys
+}
+
+func selectorToLabelSelector(s labels.Selector) (*metav1.LabelSelector, error) {
+	r, _ := s.Requirements()
+	labelSelector := &metav1.LabelSelector{
+		MatchLabels:      map[string]string{},
+		MatchExpressions: []metav1.LabelSelectorRequirement{},
+	}
+
+	for _, requirement := range r {
+		var op metav1.LabelSelectorOperator
+		switch requirement.Operator() {
+		case selection.Equals, selection.DoubleEquals:
+			labelSelector.MatchLabels[requirement.Key()] = requirement.Values().List()[0]
+			continue
+		case selection.In:
+			op = metav1.LabelSelectorOpIn
+		case selection.NotIn, selection.NotEquals:
+			op = metav1.LabelSelectorOpNotIn
+		case selection.Exists:
+			op = metav1.LabelSelectorOpExists
+		case selection.DoesNotExist:
+			op = metav1.LabelSelectorOpDoesNotExist
+		default:
+			return nil, fmt.Errorf("%s is not a valid pod selector operator", requirement.Operator())
+		}
+
+		r := metav1.LabelSelectorRequirement{
+			Key:      requirement.Key(),
+			Values:   requirement.Values().List(),
+			Operator: op,
+		}
+
+		labelSelector.MatchExpressions = append(labelSelector.MatchExpressions, r)
+	}
+	return labelSelector, nil
 }
 
 func splitCommaSeparatedString(commaSeparatedString string) []string {

@@ -3,6 +3,7 @@ package annotations
 import (
 	"errors"
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
 )
 
@@ -325,6 +326,110 @@ func Test_serviceAnnotationParser_ParseStringMapAnnotation(t *testing.T) {
 				assert.Equal(t, tt.wantExist, exists)
 				if tt.wantExist {
 					assert.Equal(t, tt.wantValue, value)
+				}
+			}
+		})
+	}
+}
+
+func Test_serviceAnnotationParser_ParseLabelSelectorAnnotation(t *testing.T) {
+	tests := []struct {
+		name        string
+		prefix      string
+		opts        []ParseOption
+		suffix      string
+		annotations map[string]string
+		wantExist   bool
+		wantValue   string
+		wantError   error
+	}{
+		{
+			name:        "empty",
+			prefix:      "",
+			suffix:      "",
+			annotations: nil,
+			wantExist:   false,
+			wantValue:   "",
+		},
+		{
+			name:   "set based",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "environment in (production, qa), environment notin (qa2)",
+			},
+			wantExist: true,
+			wantValue: "environment in (production, qa), environment notin (qa2)",
+		},
+		{
+			name:   "multiple keys",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "key1=value1, key2=value2, key3/with-slash=value3, key4/empty-value=",
+			},
+			wantExist: true,
+			wantValue: "key1=value1,key2=value2,key3/with-slash=value3,key4/empty-value=",
+		},
+		{
+			name:   "multiple keys with not",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "key1!=value1, key2=value2, key3/with-slash!=value3, key4/empty-value!=",
+			},
+			wantExist: true,
+			wantValue: "key1 notin (value1),key2=value2,key3/with-slash notin (value3),key4/empty-value notin ()",
+		},
+		{
+			name:   "test exists operator",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "key1,key2",
+			},
+			wantExist: true,
+			wantValue: "key1,key2",
+		},
+		{
+			name:   "test not exists operator",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "!key1,key2",
+			},
+			wantExist: true,
+			wantValue: "!key1,key2",
+		},
+		{
+			name:   "invalid key-value pair - emptyKey",
+			prefix: "p.co",
+			suffix: "sfx",
+			annotations: map[string]string{
+				"first-value": "1",
+				"p.co/sfx":    "=value",
+			},
+			wantError: errors.New("failed to parse label selector annotation, p.co/sfx: =value found '=', expected: !, identifier, or 'end of string'"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewSuffixAnnotationParser(tt.prefix)
+			var value *metav1.LabelSelector
+			exists, err := parser.ParseLabelSelectorAnnotation(tt.suffix, &value, tt.annotations, tt.opts...)
+			if tt.wantError != nil {
+				assert.EqualError(t, err, tt.wantError.Error())
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantExist, exists)
+				if tt.wantExist {
+					w, _ := metav1.ParseToLabelSelector(tt.wantValue)
+					assert.Equal(t, w, value)
 				}
 			}
 		})
